@@ -231,8 +231,10 @@ int main() {
 
     AgentState state = AgentState::SLEEPING;
     int stateHoldTicks = 0;
-    int consecutiveAuraHits = 0;
-    int consecutiveExitHits = 0;
+
+    // Leaky accumulators for smooth and robust keyword spotting
+    float auraAccumulator = 0.0f;
+    float exitAccumulator = 0.0f;
 
     // VAD & Full sentence capture variables
     bool userIsSpeaking = false;
@@ -280,16 +282,18 @@ int main() {
         // STATE MACHINE
         if (state == AgentState::SLEEPING) {
             // In SLEEPING:
-            // Background hums and faint noise (RMS < 0.015) are ignored without waking up
-            if (currentRms > 0.015f && pred.probabilities[2] > 0.70f) {
-                consecutiveAuraHits++;
-                if (consecutiveAuraHits >= 2) { // 2 consecutive frames = ~200ms
+            // Dynamic threshold: accepts normal and soft Indian voices (currentRms > 0.003f)
+            float auraProb = pred.probabilities[2];
+            if (currentRms > 0.003f && auraProb > 0.45f) {
+                auraAccumulator += auraProb;
+                if (auraAccumulator >= 0.80f) {
                     state = AgentState::WAKE_AURA;
                     stateHoldTicks = 10; // Green LED for 1.0 second
-                    consecutiveAuraHits = 0;
+                    auraAccumulator = 0.0f;
+                    exitAccumulator = 0.0f;
                 }
             } else {
-                if (consecutiveAuraHits > 0) consecutiveAuraHits--;
+                auraAccumulator *= 0.5f; // Exponential decay
             }
         } 
         else if (state == AgentState::WAKE_AURA) {
@@ -297,50 +301,55 @@ int main() {
             if (stateHoldTicks <= 0) {
                 // Transition to Active Command Listening
                 state = AgentState::LISTENING_COMMAND;
-                consecutiveExitHits = 0;
+                auraAccumulator = 0.0f;
+                exitAccumulator = 0.0f;
                 userIsSpeaking = false;
                 speechDurationMs = 0;
                 silenceDurationMs = 0;
             }
         } 
         else if (state == AgentState::LISTENING_COMMAND) {
-            // Check for explicit "Exit" keyword to go to sleep
-            if (pred.probabilities[3] > 0.75f) {
-                consecutiveExitHits++;
-                if (consecutiveExitHits >= 2) {
+            float exitProb = pred.probabilities[3];
+
+            // VAD Speech tracking
+            if (currentRms > 0.007f) {
+                userIsSpeaking = true;
+                speechDurationMs += 100;
+                silenceDurationMs = 0;
+            } else if (userIsSpeaking) {
+                silenceDurationMs += 100;
+            }
+
+            // ONLY check for "Exit" if:
+            // 1. The user has NOT been speaking a long sentence (speechDurationMs < 1200ms)
+            // 2. The exit probability is high and dominant over unknown
+            if (speechDurationMs < 1200 && exitProb > 0.70f && exitProb > pred.probabilities[1]) {
+                exitAccumulator += exitProb;
+                if (exitAccumulator >= 0.90f) {
                     state = AgentState::COMMAND_DONE;
                     stateHoldTicks = 15; // Red LED for 1.5s
-                    consecutiveExitHits = 0;
+                    exitAccumulator = 0.0f;
+                    auraAccumulator = 0.0f;
                     userIsSpeaking = false;
                 }
             } else {
-                if (consecutiveExitHits > 0) consecutiveExitHits--;
+                exitAccumulator *= 0.5f; // Exponential decay
             }
 
-            // VAD: Capture full sentences (e.g. "what is the time")
+            // VAD: Capture full command sentence without cutting off
             if (state == AgentState::LISTENING_COMMAND) {
-                // Speech activity threshold
-                if (currentRms > 0.020f) {
-                    userIsSpeaking = true;
-                    speechDurationMs += 100;
+                if (userIsSpeaking && silenceDurationMs >= 1000 && speechDurationMs >= 400) {
+                    // Full command sentence completed!
+                    lastCommandSec = static_cast<float>(speechDurationMs + silenceDurationMs) / 1000.0f;
+                    totalCommandsExecuted++;
+                    userIsSpeaking = false;
+                    speechDurationMs = 0;
                     silenceDurationMs = 0;
-                } else if (userIsSpeaking) {
-                    // User was speaking, now paused
-                    silenceDurationMs += 100;
+                    exitAccumulator = 0.0f;
 
-                    // When pause reaches 1.0 second and user spoke at least 0.5s:
-                    if (silenceDurationMs >= 1000 && speechDurationMs >= 500) {
-                        // Full command sentence completed!
-                        lastCommandSec = static_cast<float>(speechDurationMs + silenceDurationMs) / 1000.0f;
-                        totalCommandsExecuted++;
-                        userIsSpeaking = false;
-                        speechDurationMs = 0;
-                        silenceDurationMs = 0;
-
-                        // Switch to Thinking / Analysing state
-                        state = AgentState::THINKING_ANALYSING;
-                        stateHoldTicks = 15; // Think for 1.5s, then loop back to command listening!
-                    }
+                    // Switch to Thinking / Analysing state
+                    state = AgentState::THINKING_ANALYSING;
+                    stateHoldTicks = 15; // Think for 1.5s, then loop back to command listening!
                 }
             }
         } 
@@ -352,7 +361,8 @@ int main() {
                 userIsSpeaking = false;
                 speechDurationMs = 0;
                 silenceDurationMs = 0;
-                consecutiveExitHits = 0;
+                exitAccumulator = 0.0f;
+                auraAccumulator = 0.0f;
             }
         } 
         else if (state == AgentState::COMMAND_DONE) {
@@ -360,9 +370,11 @@ int main() {
             if (stateHoldTicks <= 0) {
                 // Return to dormant SLEEPING state
                 state = AgentState::SLEEPING;
-                consecutiveAuraHits = 0;
-                consecutiveExitHits = 0;
+                auraAccumulator = 0.0f;
+                exitAccumulator = 0.0f;
                 userIsSpeaking = false;
+                speechDurationMs = 0;
+                silenceDurationMs = 0;
             }
         }
 

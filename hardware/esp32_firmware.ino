@@ -347,9 +347,9 @@ void loop() {
     float ramKb = 36.8f; // Fixed static tensor arena
     float cpuPercent = (latencyMs / 100.0f) * 100.0f; // Duty cycle in 100ms hop
 
-    // 3. State Machine & Hardware LED control (Debounced)
-    static int consecutiveAuraHits = 0;
-    static int consecutiveExitHits = 0;
+    // 3. State Machine & Hardware LED control (Leaky Accumulator + VAD)
+    static float auraAccumulator = 0.0f;
+    static float exitAccumulator = 0.0f;
     static bool userSpeaking = false;
     static int speechDuration = 0;
     static int silenceDuration = 0;
@@ -367,15 +367,17 @@ void loop() {
         digitalWrite(LED_BLUE_PIN, LOW);
         digitalWrite(LED_RED_PIN, LOW);
 
-        if (frameRms > 0.015f && probs[2] > 0.70f) { // "Aura" wake word with active speech energy
-            consecutiveAuraHits++;
-            if (consecutiveAuraHits >= 2) { // 2 consecutive frames = ~200ms
+        float auraProb = probs[2];
+        if (frameRms > 0.003f && auraProb > 0.45f) { // "Aura" wake word with active speech energy
+            auraAccumulator += auraProb;
+            if (auraAccumulator >= 0.80f) {
                 currentState = WAKE_AURA;
                 stateTimer = 10; // Green LED for ~1.0s
-                consecutiveAuraHits = 0;
+                auraAccumulator = 0.0f;
+                exitAccumulator = 0.0f;
             }
         } else {
-            if (consecutiveAuraHits > 0) consecutiveAuraHits--;
+            auraAccumulator *= 0.5f;
         }
     } else if (currentState == WAKE_AURA) {
         digitalWrite(LED_GREEN_PIN, HIGH);
@@ -385,7 +387,8 @@ void loop() {
         stateTimer--;
         if (stateTimer <= 0) {
             currentState = STREAMING_THINKING;
-            consecutiveExitHits = 0;
+            auraAccumulator = 0.0f;
+            exitAccumulator = 0.0f;
             userSpeaking = false;
             speechDuration = 0;
             silenceDuration = 0;
@@ -395,34 +398,42 @@ void loop() {
         digitalWrite(LED_BLUE_PIN, HIGH); // Blue LED = Active Command Listener
         digitalWrite(LED_RED_PIN, LOW);
 
-        // Check if user says "Exit" to go to sleep
-        if (probs[3] > 0.75f) {
-            consecutiveExitHits++;
-            if (consecutiveExitHits >= 2) {
+        float exitProb = probs[3];
+
+        // VAD: Speech tracking
+        if (frameRms > 0.007f) {
+            userSpeaking = true;
+            speechDuration += 100;
+            silenceDuration = 0;
+        } else if (userSpeaking) {
+            silenceDuration += 100;
+        }
+
+        // ONLY check for "Exit" if:
+        // 1. Not in the middle of a long sentence (speechDuration < 1200ms)
+        // 2. Exit probability is dominant over unknown
+        if (speechDuration < 1200 && exitProb > 0.70f && exitProb > probs[1]) {
+            exitAccumulator += exitProb;
+            if (exitAccumulator >= 0.90f) {
                 currentState = COMMAND_DONE;
                 stateTimer = 15; // Red LED for ~1.5s
-                consecutiveExitHits = 0;
+                exitAccumulator = 0.0f;
+                auraAccumulator = 0.0f;
                 userSpeaking = false;
             }
         } else {
-            if (consecutiveExitHits > 0) consecutiveExitHits--;
+            exitAccumulator *= 0.5f;
         }
 
-        // VAD: Capture full sentences without cutting off
+        // VAD: Capture full sentence without cutting off
         if (currentState == STREAMING_THINKING) {
-            if (frameRms > 0.020f) {
-                userSpeaking = true;
-                speechDuration += 100;
+            if (userSpeaking && silenceDuration >= 1000 && speechDuration >= 400) {
+                // Full sentence received! Flash Blue LED and loop back to listen for next command
+                userSpeaking = false;
+                speechDuration = 0;
                 silenceDuration = 0;
-            } else if (userSpeaking) {
-                silenceDuration += 100;
-                if (silenceDuration >= 1000 && speechDuration >= 500) {
-                    // Full sentence received! Flash Blue LED and loop back to listen for next command
-                    userSpeaking = false;
-                    speechDuration = 0;
-                    silenceDuration = 0;
-                    // Command executed -> Ready for next command!
-                }
+                exitAccumulator = 0.0f;
+                // Command executed -> Ready for next command!
             }
         }
     } else if (currentState == COMMAND_DONE) {
@@ -433,8 +444,11 @@ void loop() {
         stateTimer--;
         if (stateTimer <= 0) {
             currentState = IDLE_LISTENING; // Return to dormant sleep
-            consecutiveAuraHits = 0;
-            consecutiveExitHits = 0;
+            auraAccumulator = 0.0f;
+            exitAccumulator = 0.0f;
+            userSpeaking = false;
+            speechDuration = 0;
+            silenceDuration = 0;
         }
     }
 
