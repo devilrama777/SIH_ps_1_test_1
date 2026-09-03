@@ -17,6 +17,7 @@
 #include <chrono>
 #include <iomanip>
 #include <atomic>
+#include <cmath>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -24,7 +25,7 @@
 #include <conio.h>
 #endif
 
-// ANSI Color Codes
+// ANSI Colors
 #define COLOR_RESET   "\033[0m"
 #define COLOR_BOLD    "\033[1m"
 #define COLOR_GREEN   "\033[32m"
@@ -38,10 +39,11 @@
 #define BG_RED        "\033[41;37m"
 
 enum class AgentState {
-    SLEEPING,            // Dormant: All speech/commands IGNORED. Only wakes on "Aura"
-    WAKE_AURA,           // Waking up: Green LED ON
-    LISTENING_COMMAND,   // Active command listening & streaming: Blue LED ON
-    COMMAND_DONE         // Finished / Sleep: Red LED ON
+    SLEEPING,            // Dormant: All speech/hums IGNORED. Wakes ONLY on "Aura"
+    WAKE_AURA,           // Waking up: Green LED ON (1.0s)
+    LISTENING_COMMAND,   // Active command listening: Blue LED ON. Captures full sentences!
+    THINKING_ANALYSING,  // Thinking / Analysing: Blue LED flashing. Executes and loops back!
+    COMMAND_DONE         // Sleeping / Exit: Red LED ON (1.5s)
 };
 
 constexpr int SAMPLE_RATE = 16000;
@@ -97,7 +99,16 @@ void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uin
     g_ringBuffer.write(pInputFloat, frameCount);
 }
 
-void printDashboard(AgentState state, const SystemMetrics& metrics, const TinyKWS::PredictionResult& pred, int streamCounter) {
+float computeRMS(const float* data, size_t count) {
+    float sum = 0.0f;
+    for (size_t i = 0; i < count; ++i) {
+        sum += data[i] * data[i];
+    }
+    return std::sqrt(sum / (float)count);
+}
+
+void printDashboard(AgentState state, const SystemMetrics& metrics, const TinyKWS::PredictionResult& pred, 
+                    int commandCount, float lastCommandDurationSec, bool isSpeakingNow) {
     std::cout << "\033[H";
 
     std::cout << COLOR_BOLD << "========================================================================\n";
@@ -109,9 +120,11 @@ void printDashboard(AgentState state, const SystemMetrics& metrics, const TinyKW
     if (state == AgentState::WAKE_AURA) {
         std::cout << BG_GREEN << " [ GREEN: WAKE (AURA) ] " << COLOR_RESET << "  [ BLUE: OFF ]  [ RED: OFF ]\n";
     } else if (state == AgentState::LISTENING_COMMAND) {
-        std::cout << " [ GREEN: OFF ]  " << BG_BLUE << " [ BLUE: THINKING / STREAMING ] " << COLOR_RESET << "  [ RED: OFF ]\n";
+        std::cout << " [ GREEN: OFF ]  " << BG_BLUE << " [ BLUE: LISTENING FOR COMMAND ] " << COLOR_RESET << "  [ RED: OFF ]\n";
+    } else if (state == AgentState::THINKING_ANALYSING) {
+        std::cout << " [ GREEN: OFF ]  " << BG_BLUE << " [ BLUE: *** THINKING / ANALYSING *** ] " << COLOR_RESET << "  [ RED: OFF ]\n";
     } else if (state == AgentState::COMMAND_DONE) {
-        std::cout << " [ GREEN: OFF ]  [ BLUE: OFF ]  " << BG_RED << " [ RED: SLEEP / DONE ] " << COLOR_RESET << "\n";
+        std::cout << " [ GREEN: OFF ]  [ BLUE: OFF ]  " << BG_RED << " [ RED: SLEEP / EXIT ] " << COLOR_RESET << "\n";
     } else {
         std::cout << " [ GREEN: OFF ]  [ BLUE: OFF ]  [ RED: OFF ]  " << COLOR_CYAN << "(ASLEEP / DORMANT)" << COLOR_RESET << "\n";
     }
@@ -123,7 +136,10 @@ void printDashboard(AgentState state, const SystemMetrics& metrics, const TinyKW
     // OLED Row 1: State
     std::string stateStr = "ASLEEP (COMMANDS IGNORED)";
     if (state == AgentState::WAKE_AURA) stateStr = ">> WAKE DETECTED: AURA <<";
-    else if (state == AgentState::LISTENING_COMMAND) stateStr = ">> ACTIVE: LISTENING FOR COMMAND <<";
+    else if (state == AgentState::LISTENING_COMMAND) {
+        stateStr = isSpeakingNow ? ">> LISTENING: [USER SPEAKING...] <<" : ">> ACTIVE: READY FOR COMMAND <<";
+    }
+    else if (state == AgentState::THINKING_ANALYSING) stateStr = ">> THINKING / ANALYSING COMMAND... <<";
     else if (state == AgentState::COMMAND_DONE) stateStr = ">> GOING TO SLEEP... <<";
 
     std::cout << " | State:   " << std::left << std::setw(58) << stateStr << "|\n";
@@ -152,18 +168,24 @@ void printDashboard(AgentState state, const SystemMetrics& metrics, const TinyKW
     std::cout << " +--------------------------------------------------------------------+\n";
 
     if (state == AgentState::LISTENING_COMMAND) {
-        std::cout << COLOR_BLUE << "\n [BLUE LIGHT ON - ACTIVE CONTINUOUS COMMAND LISTENER]:\n"
-                  << " -> Speak commands continuously (e.g., 'What is today's date?'). Aura stays active!\n"
-                  << " -> Streaming audio packet #" << streamCounter << " to Cloud ASR server...\n"
-                  << " -> Say " << COLOR_RED << "'Sleep'" << COLOR_BLUE << " or " << COLOR_RED << "'Exit' / 'Terminate'" << COLOR_BLUE << " to stop listening.\n" << COLOR_RESET;
+        std::cout << COLOR_BLUE << "\n [BLUE LIGHT ON - ACTIVE COMMAND LISTENER]:\n"
+                  << " -> Speak your full command line/sentence (e.g., 'What is the time?').\n"
+                  << " -> Aura listens to the whole sentence until you stop speaking.\n"
+                  << " -> Commands executed so far: " << commandCount << "\n"
+                  << " -> Say " << COLOR_RED << "'Exit'" << COLOR_BLUE << " to put Aura to sleep.\n" << COLOR_RESET;
+    } else if (state == AgentState::THINKING_ANALYSING) {
+        std::cout << COLOR_MAGENTA << "\n [BLUE LIGHT FLASHING - THINKING / ANALYSING]:\n"
+                  << " -> Full sentence captured (" << std::fixed << std::setprecision(1) << lastCommandDurationSec 
+                  << "s duration, " << (int)(lastCommandDurationSec * 16000) << " audio samples).\n"
+                  << " -> Command analysed & executed! Returning immediately to listen for next command...\n" << COLOR_RESET;
     } else if (state == AgentState::WAKE_AURA) {
         std::cout << COLOR_GREEN << "\n [GREEN LIGHT ON]: 'Aura' wake word confirmed! Waking up system...\n" << COLOR_RESET;
     } else if (state == AgentState::COMMAND_DONE) {
-        std::cout << COLOR_RED << "\n [RED LIGHT ON]: Command completed. Returning Aura to sleep mode.\n" << COLOR_RESET;
+        std::cout << COLOR_RED << "\n [RED LIGHT ON]: 'Exit' keyword received. Putting Aura to sleep mode.\n" << COLOR_RESET;
     } else {
         std::cout << COLOR_YELLOW << "\n [AURA IS ASLEEP]:\n"
-                  << " -> Aura is dormant. General conversation / commands are completely ignored.\n"
-                  << " -> Speak " << COLOR_GREEN << "'Aura'" << COLOR_YELLOW << " clearly into the microphone to wake up.\n"
+                  << " -> Aura is dormant. General conversation, hums, and commands are 100% ignored.\n"
+                  << " -> Speak " << COLOR_GREEN << "'Aura'" << COLOR_YELLOW << " into the microphone to wake up.\n"
                   << " -> Press " << COLOR_CYAN << "[Q]" << COLOR_YELLOW << " or " << COLOR_CYAN << "[Ctrl+C]" << COLOR_YELLOW << " anytime to quit.\n" << COLOR_RESET;
     }
 
@@ -209,9 +231,15 @@ int main() {
 
     AgentState state = AgentState::SLEEPING;
     int stateHoldTicks = 0;
-    int streamingPacketCounter = 0;
     int consecutiveAuraHits = 0;
-    int consecutiveSleepHits = 0;
+    int consecutiveExitHits = 0;
+
+    // VAD & Full sentence capture variables
+    bool userIsSpeaking = false;
+    int speechDurationMs = 0;
+    int silenceDurationMs = 0;
+    int totalCommandsExecuted = 0;
+    float lastCommandSec = 0.0f;
 
     std::vector<float> audioWindow(BUFFER_SAMPLES, 0.0f);
     std::vector<float> melFeatures(TinyDSP::NUM_FRAMES * TinyDSP::NUM_MEL_BINS, 0.0f);
@@ -228,16 +256,18 @@ int main() {
         auto loopStart = std::chrono::steady_clock::now();
 
 #if defined(_WIN32)
-        // Check for 'q' or 'Q' keypress to quit cleanly
         if (_kbhit()) {
             char ch = _getch();
-            if (ch == 'q' || ch == 'Q' || ch == 27) { // 27 = ESC
+            if (ch == 'q' || ch == 'Q' || ch == 27) {
                 break;
             }
         }
 #endif
 
         g_ringBuffer.getLatest(audioWindow);
+        float currentRms = computeRMS(audioWindow.data(), BUFFER_SAMPLES);
+
+        // Feature extraction & Inference
         dsp.extractFeatures(audioWindow.data(), BUFFER_SAMPLES, melFeatures.data());
 
         telemetry.startTimer();
@@ -247,16 +277,15 @@ int main() {
         SystemMetrics metrics = telemetry.updateMetrics();
         lastPred = pred;
 
-        // STATE MACHINE WITH TEMPORAL DEBOUNCING
+        // STATE MACHINE
         if (state == AgentState::SLEEPING) {
             // In SLEEPING:
-            // All normal conversation/commands are completely ignored!
-            // Only wakes up when "Aura" is detected with confidence > 0.70 across consecutive frames
-            if (pred.probabilities[2] > 0.70f) {
+            // Background hums and faint noise (RMS < 0.015) are ignored without waking up
+            if (currentRms > 0.015f && pred.probabilities[2] > 0.70f) {
                 consecutiveAuraHits++;
                 if (consecutiveAuraHits >= 2) { // 2 consecutive frames = ~200ms
                     state = AgentState::WAKE_AURA;
-                    stateHoldTicks = 12; // Show Green LED for ~1.2s to acknowledge
+                    stateHoldTicks = 10; // Green LED for 1.0 second
                     consecutiveAuraHits = 0;
                 }
             } else {
@@ -266,39 +295,78 @@ int main() {
         else if (state == AgentState::WAKE_AURA) {
             stateHoldTicks--;
             if (stateHoldTicks <= 0) {
-                // Transition to Active Continuous Command Listening
+                // Transition to Active Command Listening
                 state = AgentState::LISTENING_COMMAND;
-                streamingPacketCounter = 0;
-                consecutiveSleepHits = 0;
+                consecutiveExitHits = 0;
+                userIsSpeaking = false;
+                speechDurationMs = 0;
+                silenceDurationMs = 0;
             }
         } 
         else if (state == AgentState::LISTENING_COMMAND) {
-            // Continuous running: Never auto-terminates!
-            streamingPacketCounter++;
-
-            // Check if user says "Sleep", "Exit", or "Terminate"
+            // Check for explicit "Exit" keyword to go to sleep
             if (pred.probabilities[3] > 0.75f) {
-                consecutiveSleepHits++;
-                if (consecutiveSleepHits >= 2) {
+                consecutiveExitHits++;
+                if (consecutiveExitHits >= 2) {
                     state = AgentState::COMMAND_DONE;
-                    stateHoldTicks = 15; // Show Red LED for 1.5s
-                    consecutiveSleepHits = 0;
+                    stateHoldTicks = 15; // Red LED for 1.5s
+                    consecutiveExitHits = 0;
+                    userIsSpeaking = false;
                 }
             } else {
-                if (consecutiveSleepHits > 0) consecutiveSleepHits--;
+                if (consecutiveExitHits > 0) consecutiveExitHits--;
+            }
+
+            // VAD: Capture full sentences (e.g. "what is the time")
+            if (state == AgentState::LISTENING_COMMAND) {
+                // Speech activity threshold
+                if (currentRms > 0.020f) {
+                    userIsSpeaking = true;
+                    speechDurationMs += 100;
+                    silenceDurationMs = 0;
+                } else if (userIsSpeaking) {
+                    // User was speaking, now paused
+                    silenceDurationMs += 100;
+
+                    // When pause reaches 1.0 second and user spoke at least 0.5s:
+                    if (silenceDurationMs >= 1000 && speechDurationMs >= 500) {
+                        // Full command sentence completed!
+                        lastCommandSec = static_cast<float>(speechDurationMs + silenceDurationMs) / 1000.0f;
+                        totalCommandsExecuted++;
+                        userIsSpeaking = false;
+                        speechDurationMs = 0;
+                        silenceDurationMs = 0;
+
+                        // Switch to Thinking / Analysing state
+                        state = AgentState::THINKING_ANALYSING;
+                        stateHoldTicks = 15; // Think for 1.5s, then loop back to command listening!
+                    }
+                }
+            }
+        } 
+        else if (state == AgentState::THINKING_ANALYSING) {
+            stateHoldTicks--;
+            if (stateHoldTicks <= 0) {
+                // Command executed! Loop straight back to LISTENING_COMMAND!
+                state = AgentState::LISTENING_COMMAND;
+                userIsSpeaking = false;
+                speechDurationMs = 0;
+                silenceDurationMs = 0;
+                consecutiveExitHits = 0;
             }
         } 
         else if (state == AgentState::COMMAND_DONE) {
             stateHoldTicks--;
             if (stateHoldTicks <= 0) {
-                // Return to dormant SLEEPING state (where commands are ignored again)
+                // Return to dormant SLEEPING state
                 state = AgentState::SLEEPING;
                 consecutiveAuraHits = 0;
-                consecutiveSleepHits = 0;
+                consecutiveExitHits = 0;
+                userIsSpeaking = false;
             }
         }
 
-        printDashboard(state, metrics, lastPred, streamingPacketCounter);
+        printDashboard(state, metrics, lastPred, totalCommandsExecuted, lastCommandSec, userIsSpeaking);
 
         auto loopEnd = std::chrono::steady_clock::now();
         auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(loopEnd - loopStart).count();

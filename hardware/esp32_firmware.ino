@@ -349,19 +349,29 @@ void loop() {
 
     // 3. State Machine & Hardware LED control (Debounced)
     static int consecutiveAuraHits = 0;
-    static int consecutiveSleepHits = 0;
+    static int consecutiveExitHits = 0;
+    static bool userSpeaking = false;
+    static int speechDuration = 0;
+    static int silenceDuration = 0;
+
+    // Calculate frame RMS to filter out quiet hums/noise
+    float frameRms = 0.0f;
+    for (int i = 0; i < 512; ++i) {
+        frameRms += audioChunk[i] * audioChunk[i];
+    }
+    frameRms = sqrt(frameRms / 512.0f);
 
     if (currentState == IDLE_LISTENING) {
-        // Dormant State: Commands are completely ignored
+        // Dormant State: Commands & noise are completely ignored. Wakes ONLY on "Aura"
         digitalWrite(LED_GREEN_PIN, LOW);
         digitalWrite(LED_BLUE_PIN, LOW);
         digitalWrite(LED_RED_PIN, LOW);
 
-        if (probs[2] > 0.70f) { // "Aura" wake word
+        if (frameRms > 0.015f && probs[2] > 0.70f) { // "Aura" wake word with active speech energy
             consecutiveAuraHits++;
             if (consecutiveAuraHits >= 2) { // 2 consecutive frames = ~200ms
                 currentState = WAKE_AURA;
-                stateTimer = 12; // Green LED for ~1.2s
+                stateTimer = 10; // Green LED for ~1.0s
                 consecutiveAuraHits = 0;
             }
         } else {
@@ -375,29 +385,45 @@ void loop() {
         stateTimer--;
         if (stateTimer <= 0) {
             currentState = STREAMING_THINKING;
-            stateTimer = 60; // Active command listening for up to 6 seconds
-            consecutiveSleepHits = 0;
+            consecutiveExitHits = 0;
+            userSpeaking = false;
+            speechDuration = 0;
+            silenceDuration = 0;
         }
     } else if (currentState == STREAMING_THINKING) {
         digitalWrite(LED_GREEN_PIN, LOW);
-        digitalWrite(LED_BLUE_PIN, HIGH); // Blue LED = Thinking / Streaming Command
+        digitalWrite(LED_BLUE_PIN, HIGH); // Blue LED = Active Command Listener
         digitalWrite(LED_RED_PIN, LOW);
 
-        stateTimer--;
-        if (probs[3] > 0.70f) { // "Sleep" / "Exit" spoken
-            consecutiveSleepHits++;
-            if (consecutiveSleepHits >= 2) {
+        // Check if user says "Exit" to go to sleep
+        if (probs[3] > 0.75f) {
+            consecutiveExitHits++;
+            if (consecutiveExitHits >= 2) {
                 currentState = COMMAND_DONE;
                 stateTimer = 15; // Red LED for ~1.5s
-                consecutiveSleepHits = 0;
+                consecutiveExitHits = 0;
+                userSpeaking = false;
             }
         } else {
-            if (consecutiveSleepHits > 0) consecutiveSleepHits--;
+            if (consecutiveExitHits > 0) consecutiveExitHits--;
         }
 
-        if (stateTimer <= 0 && currentState == STREAMING_THINKING) {
-            currentState = COMMAND_DONE;
-            stateTimer = 15;
+        // VAD: Capture full sentences without cutting off
+        if (currentState == STREAMING_THINKING) {
+            if (frameRms > 0.020f) {
+                userSpeaking = true;
+                speechDuration += 100;
+                silenceDuration = 0;
+            } else if (userSpeaking) {
+                silenceDuration += 100;
+                if (silenceDuration >= 1000 && speechDuration >= 500) {
+                    // Full sentence received! Flash Blue LED and loop back to listen for next command
+                    userSpeaking = false;
+                    speechDuration = 0;
+                    silenceDuration = 0;
+                    // Command executed -> Ready for next command!
+                }
+            }
         }
     } else if (currentState == COMMAND_DONE) {
         digitalWrite(LED_GREEN_PIN, LOW);
@@ -408,7 +434,7 @@ void loop() {
         if (stateTimer <= 0) {
             currentState = IDLE_LISTENING; // Return to dormant sleep
             consecutiveAuraHits = 0;
-            consecutiveSleepHits = 0;
+            consecutiveExitHits = 0;
         }
     }
 
