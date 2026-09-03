@@ -12,7 +12,7 @@ An ultra-lightweight, high-accuracy TinyML Keyword Spotting (KWS) and audio stre
 | **RAM Footprint** | $< 256\text{ KB}$ | **$36.8\text{ KB}$** (Static tensor arena) | **PASS** (85% free headroom) |
 | **Idle CPU Utilization**| $< 10\%$ during listening | **$0.00\% - 1.2\%$** | **PASS** (Ultra-low power) |
 | **Frameworks** | Open-source TinyML only | Custom C++ DSP + INT8 DS-CNN Runtime | **PASS** (Zero proprietary SDKs) |
-| **Keyword Spotting** | Custom Keyword | **"Aura"** (Wake) & **"Sleep" / "Exit"** (Stop) | **PASS** |
+| **Keyword Spotting** | Custom Keyword | **"Aura"** (Wake) & **"Exit"** (Sleep) | **PASS** |
 | **Hardware Display** | Telemetry Display & LEDs | 0.96" SSD1306 OLED + 3-LED Indicator Bar | **PASS** |
 
 ---
@@ -29,11 +29,12 @@ An ultra-lightweight, high-accuracy TinyML Keyword Spotting (KWS) and audio stre
 [TinyKWS INT8 Engine] ──► Depthwise Separable CNN (DS-CNN) (~2,500 parameters, 10.3 KB C-Array)
            │
            ▼
-[State Machine (Debounced)]
-   ├── SLEEPING: Commands & noise 100% ignored. Wakes ONLY on "Aura" (2-frame debounce)
-   ├── WAKE_AURA: Green LED illuminates (1.2s acknowledgement)
-   ├── LISTENING_COMMAND: Blue LED illuminates. Streams continuous audio until explicit "Sleep" / "Exit"
-   └── COMMAND_DONE: Red LED illuminates. Returns cleanly to SLEEPING state
+[State Machine (Debounced with VAD Sentence Capture)]
+   ├── SLEEPING: Hums, noise & commands 100% ignored. Wakes ONLY on "Aura" (RMS gated + 2-frame debounce)
+   ├── WAKE_AURA: Green LED illuminates (1.0s acknowledgement)
+   ├── LISTENING_COMMAND: Blue LED illuminates. Uses VAD to capture FULL sentence without cutting off
+   ├── THINKING_ANALYSING: Blue LED flashes. Telemetry displayed. Immediately loops back to LISTENING_COMMAND
+   └── COMMAND_DONE: Red LED illuminates when "Exit" is spoken. Returns to SLEEPING state
 ```
 
 ---
@@ -53,7 +54,7 @@ An ultra-lightweight, high-accuracy TinyML Keyword Spotting (KWS) and audio stre
 │   ├── model_data.h         # Pre-trained, quantized INT8 weights and scale factors (10.3 KB)
 │   └── telemetry.h          # Microsecond latency, RAM working set, and CPU percent monitor
 ├── scripts/
-│   ├── generate_dataset.py  # SAPI synthetic speech generator & augmentor (2,000+ samples)
+│   ├── generate_dataset.py  # SAPI synthetic speech generator & augmentor (2,300+ samples)
 │   └── train_kws_model.py   # PyTorch DS-CNN training pipeline & INT8 C-header exporter
 └── src/
     ├── kws_engine.cpp       # Quantized neural net forward inference implementation
@@ -80,11 +81,13 @@ g++ -O3 -std=c++17 -Iinclude src/main.cpp src/mfcc.cpp src/kws_engine.cpp src/te
 ./aura_agent.exe
 ```
 
-1. **At Launch (`ASLEEP`):** All commands like *"What is the time"* are completely ignored.
-2. **Say `"Aura"`:** The **Green LED** illuminates (`WAKE DETECTED`), transitioning to **Blue LED** (`ACTIVE COMMAND LISTENER`).
-3. **Continuous Listening:** Aura stays awake continuously, streaming audio commands to the cloud.
-4. **Say `"Sleep"`, `"Exit"`, or `"Terminate"`:** The **Red LED** illuminates and Aura returns to sleep (or closes on Exit).
-5. **Quit Anytime:** Press `Q` or `Ctrl+C`.
+1. **At Launch (`ASLEEP`):** All conversation, background hums, and commands are 100% ignored.
+2. **Say `"Aura"`:** The **Green LED** illuminates (`WAKE DETECTED`), transitioning to **Blue LED** (`READY FOR COMMAND`).
+3. **Speak Full Command:** Say your complete question (e.g. *"What is the time"* or *"What is today's date"*).
+4. **Thinking & Analysing:** Blue LED flashes (`THINKING / ANALYSING`). The system executes the command and immediately loops back to listening for your next command.
+5. **Continuous Commands:** Speak command after command without needing to wake Aura up again.
+6. **Put Aura to Sleep:** Say **`"Exit"`** $\to$ The **Red LED** illuminates and Aura returns to dormant sleep.
+7. **Quit Anytime:** Press `Q` or `Ctrl+C`.
 
 ---
 
