@@ -124,7 +124,7 @@ async def main():
             count_aura += 1
     print(f"Total 'Aura' dataset: {count_aura} Indian samples.", flush=True)
 
-    # 2. Base 'Exit' downloads across Indian voices & rates
+    # 2. Base 'Exit' downloads across Indian voices & rates (PURE 'Exit' only)
     print("2. Synthesizing base Indian 'Exit' samples...", flush=True)
     base_exits = []
     for voice in INDIAN_VOICES:
@@ -132,7 +132,7 @@ async def main():
             samples = await fetch_one_clean("Exit", voice, rate)
             if len(samples) > 1000:
                 base_exits.append(samples)
-            samples2 = await fetch_one_clean("Aura exit", voice, rate)
+            samples2 = await fetch_one_clean("Exit.", voice, rate)
             if len(samples2) > 1000:
                 base_exits.append(samples2)
 
@@ -146,16 +146,22 @@ async def main():
     print(f"Total 'Exit' dataset: {count_exit} Indian samples.", flush=True)
 
     # 3. Base 'Unknown' words/phrases across Indian voices
+    # Include words that sound phonetically close to 'exit' so they NEVER trigger false exits!
     print("3. Synthesizing base Indian 'Unknown' phrases...", flush=True)
     unknown_texts = [
+        # Phonetic lookalikes to Exit (contrastive negatives):
+        "exact", "extra", "except", "exist", "exercise", "access", "accept",
+        "next", "text", "six", "check", "expert", "packet", "select",
+        # Common command phrases & words:
         "what is the time", "what is today date", "tell me time", "time kya hai",
         "what is the temperature", "what is oxygen level", "check cabin pressure",
         "how are you", "can you hear me", "who are you", "what are you doing",
         "turn on the light", "turn off display", "open telemetry", "start engine",
-        "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "zero",
+        "one", "two", "three", "four", "five", "seven", "eight", "nine", "zero",
         "namaste", "shukriya", "hello", "theek hai", "yes", "no", "okay",
         "satellite", "isro", "chandrayaan", "gaganyaan", "rocket", "orbit", "speed",
-        "sleep", "so jao", "band karo", "stop", "terminate", "pause", "resume"
+        "sleep", "so jao", "band karo", "stop", "terminate", "pause", "resume",
+        "water level", "cabin temp", "battery status", "altitude reading", "speed of rocket"
     ]
     base_unknowns = []
     for text in unknown_texts:

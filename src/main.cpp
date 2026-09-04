@@ -242,6 +242,7 @@ int main() {
     int silenceDurationMs = 0;
     int totalCommandsExecuted = 0;
     float lastCommandSec = 0.0f;
+    float maxExitConfDuringUtterance = 0.0f;
 
     std::vector<float> audioWindow(BUFFER_SAMPLES, 0.0f);
     std::vector<float> melFeatures(TinyDSP::NUM_FRAMES * TinyDSP::NUM_MEL_BINS, 0.0f);
@@ -316,41 +317,49 @@ int main() {
                 userIsSpeaking = true;
                 speechDurationMs += 100;
                 silenceDurationMs = 0;
+                if (exitProb > maxExitConfDuringUtterance) {
+                    maxExitConfDuringUtterance = exitProb;
+                }
             } else if (userIsSpeaking) {
                 silenceDurationMs += 100;
             }
 
-            // ONLY check for "Exit" if:
-            // 1. The user has NOT been speaking a long sentence (speechDurationMs < 1200ms)
-            // 2. The exit probability is high and dominant over unknown
-            if (speechDurationMs < 1200 && exitProb > 0.70f && exitProb > pred.probabilities[1]) {
+            // Standalone quick "Exit" check (only for short isolated keyword, never during multi-word commands)
+            if (speechDurationMs <= 600 && exitProb > 0.85f && exitProb > pred.probabilities[1] + 0.25f) {
                 exitAccumulator += exitProb;
-                if (exitAccumulator >= 0.90f) {
+                if (exitAccumulator >= 1.5f) {
                     state = AgentState::COMMAND_DONE;
                     stateHoldTicks = 15; // Red LED for 1.5s
                     exitAccumulator = 0.0f;
                     auraAccumulator = 0.0f;
                     userIsSpeaking = false;
+                    maxExitConfDuringUtterance = 0.0f;
                 }
             } else {
-                exitAccumulator *= 0.5f; // Exponential decay
+                exitAccumulator *= 0.4f; // Rapid decay
             }
 
-            // VAD: Capture full command sentence without cutting off
-            if (state == AgentState::LISTENING_COMMAND) {
-                if (userIsSpeaking && silenceDurationMs >= 1000 && speechDurationMs >= 400) {
-                    // Full command sentence completed!
+            // VAD Utterance Completion (user paused speaking)
+            if (state == AgentState::LISTENING_COMMAND && userIsSpeaking && silenceDurationMs >= 800) {
+                // Check if the utterance was an isolated "Exit"
+                if (speechDurationMs <= 700 && maxExitConfDuringUtterance >= 0.80f) {
+                    state = AgentState::COMMAND_DONE;
+                    stateHoldTicks = 15; // Red LED for 1.5s
+                } else if (speechDurationMs >= 300) {
+                    // It is a valid multi-word command sentence (e.g. "what is the time")!
+                    // It can NEVER exit here - execution guaranteed!
                     lastCommandSec = static_cast<float>(speechDurationMs + silenceDurationMs) / 1000.0f;
                     totalCommandsExecuted++;
-                    userIsSpeaking = false;
-                    speechDurationMs = 0;
-                    silenceDurationMs = 0;
-                    exitAccumulator = 0.0f;
-
-                    // Switch to Thinking / Analysing state
                     state = AgentState::THINKING_ANALYSING;
-                    stateHoldTicks = 15; // Think for 1.5s, then loop back to command listening!
+                    stateHoldTicks = 15; // Think for 1.5s, then loop back to command listening
                 }
+
+                // Reset speech tracking for next utterance
+                userIsSpeaking = false;
+                speechDurationMs = 0;
+                silenceDurationMs = 0;
+                exitAccumulator = 0.0f;
+                maxExitConfDuringUtterance = 0.0f;
             }
         } 
         else if (state == AgentState::THINKING_ANALYSING) {
@@ -363,6 +372,7 @@ int main() {
                 silenceDurationMs = 0;
                 exitAccumulator = 0.0f;
                 auraAccumulator = 0.0f;
+                maxExitConfDuringUtterance = 0.0f;
             }
         } 
         else if (state == AgentState::COMMAND_DONE) {
@@ -375,6 +385,7 @@ int main() {
                 userIsSpeaking = false;
                 speechDurationMs = 0;
                 silenceDurationMs = 0;
+                maxExitConfDuringUtterance = 0.0f;
             }
         }
 

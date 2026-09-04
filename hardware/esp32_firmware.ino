@@ -350,6 +350,7 @@ void loop() {
     // 3. State Machine & Hardware LED control (Leaky Accumulator + VAD)
     static float auraAccumulator = 0.0f;
     static float exitAccumulator = 0.0f;
+    static float maxExitConfDuringUtterance = 0.0f;
     static bool userSpeaking = false;
     static int speechDuration = 0;
     static int silenceDuration = 0;
@@ -375,6 +376,7 @@ void loop() {
                 stateTimer = 10; // Green LED for ~1.0s
                 auraAccumulator = 0.0f;
                 exitAccumulator = 0.0f;
+                maxExitConfDuringUtterance = 0.0f;
             }
         } else {
             auraAccumulator *= 0.5f;
@@ -389,6 +391,7 @@ void loop() {
             currentState = STREAMING_THINKING;
             auraAccumulator = 0.0f;
             exitAccumulator = 0.0f;
+            maxExitConfDuringUtterance = 0.0f;
             userSpeaking = false;
             speechDuration = 0;
             silenceDuration = 0;
@@ -405,36 +408,42 @@ void loop() {
             userSpeaking = true;
             speechDuration += 100;
             silenceDuration = 0;
+            if (exitProb > maxExitConfDuringUtterance) {
+                maxExitConfDuringUtterance = exitProb;
+            }
         } else if (userSpeaking) {
             silenceDuration += 100;
         }
 
-        // ONLY check for "Exit" if:
-        // 1. Not in the middle of a long sentence (speechDuration < 1200ms)
-        // 2. Exit probability is dominant over unknown
-        if (speechDuration < 1200 && exitProb > 0.70f && exitProb > probs[1]) {
+        // Standalone quick "Exit" check (only for short isolated keyword, never during multi-word commands)
+        if (speechDuration <= 600 && exitProb > 0.85f && exitProb > probs[1] + 0.25f) {
             exitAccumulator += exitProb;
-            if (exitAccumulator >= 0.90f) {
+            if (exitAccumulator >= 1.5f) {
                 currentState = COMMAND_DONE;
                 stateTimer = 15; // Red LED for ~1.5s
                 exitAccumulator = 0.0f;
                 auraAccumulator = 0.0f;
                 userSpeaking = false;
+                maxExitConfDuringUtterance = 0.0f;
             }
         } else {
-            exitAccumulator *= 0.5f;
+            exitAccumulator *= 0.4f;
         }
 
-        // VAD: Capture full sentence without cutting off
-        if (currentState == STREAMING_THINKING) {
-            if (userSpeaking && silenceDuration >= 1000 && speechDuration >= 400) {
-                // Full sentence received! Flash Blue LED and loop back to listen for next command
-                userSpeaking = false;
-                speechDuration = 0;
-                silenceDuration = 0;
-                exitAccumulator = 0.0f;
-                // Command executed -> Ready for next command!
+        // VAD Utterance Completion (user paused speaking)
+        if (currentState == STREAMING_THINKING && userSpeaking && silenceDuration >= 800) {
+            if (speechDuration <= 700 && maxExitConfDuringUtterance >= 0.80f) {
+                currentState = COMMAND_DONE;
+                stateTimer = 15; // Red LED for ~1.5s
+            } else if (speechDuration >= 300) {
+                // Command executed -> Flash Blue LED and loop back to listen for next command!
+                // Can NEVER exit here - execution guaranteed!
             }
+            userSpeaking = false;
+            speechDuration = 0;
+            silenceDuration = 0;
+            exitAccumulator = 0.0f;
+            maxExitConfDuringUtterance = 0.0f;
         }
     } else if (currentState == COMMAND_DONE) {
         digitalWrite(LED_GREEN_PIN, LOW);
@@ -446,6 +455,7 @@ void loop() {
             currentState = IDLE_LISTENING; // Return to dormant sleep
             auraAccumulator = 0.0f;
             exitAccumulator = 0.0f;
+            maxExitConfDuringUtterance = 0.0f;
             userSpeaking = false;
             speechDuration = 0;
             silenceDuration = 0;
