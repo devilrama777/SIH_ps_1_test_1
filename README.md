@@ -54,8 +54,10 @@ An ultra-lightweight, high-accuracy TinyML Keyword Spotting (KWS) and audio stre
 │   ├── model_data.h         # Pre-trained, quantized INT8 weights and scale factors (10.3 KB)
 │   └── telemetry.h          # Microsecond latency, RAM working set, and CPU percent monitor
 ├── scripts/
-│   ├── generate_dataset.py  # SAPI synthetic speech generator & augmentor (2,300+ samples)
-│   └── train_kws_model.py   # PyTorch DS-CNN training pipeline & INT8 C-header exporter
+│   ├── generate_dataset.py        # SAPI synthetic speech generator & augmentor (Windows)
+│   ├── generate_indian_dataset.py # Neural Indian voice dataset generator (cross-platform, edge-tts)
+│   ├── record_voice_samples.py    # Interactive microphone voice recorder for custom user keywords
+│   └── train_kws_model.py         # PyTorch DS-CNN training pipeline & INT8 C-header exporter
 └── src/
     ├── kws_engine.cpp       # Quantized neural net forward inference implementation
     ├── main.cpp             # Terminal application: live mic streaming, state machine, OLED UI
@@ -118,6 +120,40 @@ make
 5. **Continuous Commands:** Speak command after command without needing to wake Aura up again.
 6. **Put Aura to Sleep:** Say **`"Exit"`** $\to$ The **Red LED** illuminates and Aura returns to dormant sleep.
 7. **Quit Anytime:** Press `Q` or `Ctrl+C`.
+
+---
+
+## Model Training & Custom Keyword Fine-Tuning
+
+Aura comes with pre-trained INT8 weights trained across 2,580+ diverse acoustic samples. You can retrain or add your own voice samples anytime:
+
+### 1. (Optional) Record Your Own Voice Samples
+Record your own voice saying "Aura" and "Exit" to tailor the activator to your exact pitch and accent:
+```bash
+python scripts/record_voice_samples.py
+```
+This prompts you to speak 5 samples of "Aura" and "Exit", saving them into `data/aura/` and `data/exit/`.
+
+### 2. Generate Full Neural & Augmented Dataset
+To regenerate the full multi-accent Indian neural dataset with realistic noise and phonetic lookalikes:
+```bash
+python scripts/generate_indian_dataset.py
+```
+
+### 3. Train DS-CNN & Export INT8 Weights
+Run the training pipeline:
+```bash
+python scripts/train_kws_model.py
+```
+This trains the Depthwise Separable CNN, quantizes the weights to INT8, and automatically updates both:
+* `include/model_data.h` (PC Terminal application)
+* `hardware/model_data.h` (ESP32 Firmware)
+
+### 4. Rebuild the Application
+```bash
+# Rebuild aura.exe
+g++ -O3 -std=c++17 -Iinclude src/main.cpp src/mfcc.cpp src/kws_engine.cpp src/telemetry.cpp -o aura.exe -static -static-libgcc -static-libstdc++ -lole32 -lwinmm -lpsapi
+```
 
 ---
 

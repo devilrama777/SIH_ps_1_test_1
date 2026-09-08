@@ -215,39 +215,50 @@ def export_c_header(model, norm_mean, norm_std):
         lines.append("};\n")
         return "\n".join(lines)
 
+    content = []
+    content.append("// Auto-generated INT8 Quantized Model Header for Aura KWS\n")
+    content.append("#ifndef MODEL_DATA_H\n#define MODEL_DATA_H\n\n#include <cstdint>\n\n")
+    content.append(f"static const float NORM_MEAN = {norm_mean:.6f}f;\n")
+    content.append(f"static const float NORM_STD = {norm_std:.6f}f;\n\n")
+
+    content.append(f"static const float C1_SCALE = {c1_s:.8f}f;\n")
+    content.append(array_to_c_string(c1_w, "C1_WEIGHTS", "int8_t"))
+    content.append(array_to_c_string(c1_b, "C1_BIAS", "float"))
+
+    content.append(f"static const float DW1_SCALE = {dw1_s:.8f}f;\n")
+    content.append(array_to_c_string(dw1_w, "DW1_WEIGHTS", "int8_t"))
+    content.append(array_to_c_string(dw1_b, "DW1_BIAS", "float"))
+
+    content.append(f"static const float PW1_SCALE = {pw1_s:.8f}f;\n")
+    content.append(array_to_c_string(pw1_w, "PW1_WEIGHTS", "int8_t"))
+    content.append(array_to_c_string(pw1_b, "PW1_BIAS", "float"))
+
+    content.append(f"static const float DW2_SCALE = {dw2_s:.8f}f;\n")
+    content.append(array_to_c_string(dw2_w, "DW2_WEIGHTS", "int8_t"))
+    content.append(array_to_c_string(dw2_b, "DW2_BIAS", "float"))
+
+    content.append(f"static const float PW2_SCALE = {pw2_s:.8f}f;\n")
+    content.append(array_to_c_string(pw2_w, "PW2_WEIGHTS", "int8_t"))
+    content.append(array_to_c_string(pw2_b, "PW2_BIAS", "float"))
+
+    content.append(f"static const float FC_SCALE = {fc_s:.8f}f;\n")
+    content.append(array_to_c_string(fc_w, "FC_WEIGHTS", "int8_t"))
+    content.append(array_to_c_string(fc_b, "FC_BIAS", "float"))
+
+    content.append("#endif // MODEL_DATA_H\n")
+    full_text = "".join(content)
+
+    # Write to include/model_data.h
     with open(header_path, "w") as f:
-        f.write("// Auto-generated INT8 Quantized Model Header for Aura KWS\n")
-        f.write("#ifndef MODEL_DATA_H\n#define MODEL_DATA_H\n\n#include <cstdint>\n\n")
-        f.write(f"static const float NORM_MEAN = {norm_mean:.6f}f;\n")
-        f.write(f"static const float NORM_STD = {norm_std:.6f}f;\n\n")
-
-        f.write(f"static const float C1_SCALE = {c1_s:.8f}f;\n")
-        f.write(array_to_c_string(c1_w, "C1_WEIGHTS", "int8_t"))
-        f.write(array_to_c_string(c1_b, "C1_BIAS", "float"))
-
-        f.write(f"static const float DW1_SCALE = {dw1_s:.8f}f;\n")
-        f.write(array_to_c_string(dw1_w, "DW1_WEIGHTS", "int8_t"))
-        f.write(array_to_c_string(dw1_b, "DW1_BIAS", "float"))
-
-        f.write(f"static const float PW1_SCALE = {pw1_s:.8f}f;\n")
-        f.write(array_to_c_string(pw1_w, "PW1_WEIGHTS", "int8_t"))
-        f.write(array_to_c_string(pw1_b, "PW1_BIAS", "float"))
-
-        f.write(f"static const float DW2_SCALE = {dw2_s:.8f}f;\n")
-        f.write(array_to_c_string(dw2_w, "DW2_WEIGHTS", "int8_t"))
-        f.write(array_to_c_string(dw2_b, "DW2_BIAS", "float"))
-
-        f.write(f"static const float PW2_SCALE = {pw2_s:.8f}f;\n")
-        f.write(array_to_c_string(pw2_w, "PW2_WEIGHTS", "int8_t"))
-        f.write(array_to_c_string(pw2_b, "PW2_BIAS", "float"))
-
-        f.write(f"static const float FC_SCALE = {fc_s:.8f}f;\n")
-        f.write(array_to_c_string(fc_w, "FC_WEIGHTS", "int8_t"))
-        f.write(array_to_c_string(fc_b, "FC_BIAS", "float"))
-
-        f.write("#endif // MODEL_DATA_H\n")
-
+        f.write(full_text)
     print(f"Saved INT8 model data to: {header_path}")
+
+    # Write to hardware/model_data.h for ESP32 Arduino sketch
+    hw_header_path = os.path.join(os.path.dirname(__file__), '..', 'hardware', 'model_data.h')
+    os.makedirs(os.path.dirname(hw_header_path), exist_ok=True)
+    with open(hw_header_path, "w") as f:
+        f.write(full_text)
+    print(f"Saved INT8 model data to: {hw_header_path}")
 
 if __name__ == "__main__":
     train_and_export()
