@@ -68,17 +68,47 @@ An ultra-lightweight, high-accuracy TinyML Keyword Spotting (KWS) and audio stre
 ## Quick Start (Terminal Application on PC)
 
 ### Prerequisites:
-* C++17 compiler (`g++` or `clang++` or `MSVC`)
+* C++14/C++17 compiler (`g++`, `clang++`, or `MSVC`)
+* CMake 3.14+ or Make (optional, direct compiler commands also provided)
 * Python 3.10+ (optional, only needed for re-training)
 
 ### Compilation:
+
+#### Option A: Using CMake (Recommended across all OS)
 ```bash
-g++ -O3 -std=c++17 -Iinclude src/main.cpp src/mfcc.cpp src/kws_engine.cpp src/telemetry.cpp -o aura_agent.exe -lole32 -lwinmm -lpsapi
+cmake -B build
+cmake --build build --config Release
 ```
+
+#### Option B: Using Make
+```bash
+make
+```
+
+#### Option C: Direct Compiler Command
+
+* **Windows (MinGW / GCC) - Standalone binary with static runtime (runs on any Windows desktop):**
+  ```bash
+  g++ -O3 -std=c++17 -Iinclude src/main.cpp src/mfcc.cpp src/kws_engine.cpp src/telemetry.cpp -o aura.exe -static -static-libgcc -static-libstdc++ -lole32 -lwinmm -lpsapi
+  ```
+
+* **Linux (Ubuntu / Debian / Fedora):**
+  ```bash
+  g++ -O3 -std=c++17 -Iinclude src/main.cpp src/mfcc.cpp src/kws_engine.cpp src/telemetry.cpp -o aura -lpthread -ldl -lm
+  ```
+
+* **macOS (Apple Clang / GCC):**
+  ```bash
+  g++ -O3 -std=c++17 -Iinclude src/main.cpp src/mfcc.cpp src/kws_engine.cpp src/telemetry.cpp -o aura -framework CoreAudio -framework AudioToolbox -framework CoreFoundation -lpthread -lm
+  ```
 
 ### Running:
 ```bash
-./aura_agent.exe
+# Windows:
+./aura.exe
+
+# Linux / macOS:
+./aura
 ```
 
 1. **At Launch (`ASLEEP`):** All conversation, background hums, and commands are 100% ignored.

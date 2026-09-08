@@ -9,7 +9,10 @@ Classes:
 import os
 import wave
 import numpy as np
-import comtypes.client
+try:
+    import comtypes.client
+except ImportError:
+    comtypes = None
 
 SAMPLE_RATE = 16000
 CLIP_DURATION = 1.0
@@ -108,6 +111,9 @@ def generate_dataset():
                 os.remove(os.path.join(cls_dir, old_f))
             except:
                 pass
+
+    if comtypes is None:
+        raise RuntimeError("comtypes / Windows SAPI is only available on Windows. On Linux/macOS, use 'python scripts/generate_indian_dataset.py' (uses cross-platform edge-tts).")
 
     voice_engine = comtypes.client.CreateObject('SAPI.SpVoice')
     all_voices = voice_engine.GetVoices()

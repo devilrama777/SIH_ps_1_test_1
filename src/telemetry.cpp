@@ -8,6 +8,7 @@
 #else
 #include <sys/resource.h>
 #include <unistd.h>
+#include <sys/times.h>
 #endif
 
 TelemetryMonitor::TelemetryMonitor() : lastLatencyMs(0.0f), lastCpuCheckTime(0), lastProcessCpuTime(0), numProcessors(1) {
@@ -24,6 +25,14 @@ TelemetryMonitor::TelemetryMonitor() : lastLatencyMs(0.0f), lastCpuCheckTime(0),
     if (GetProcessTimes(GetCurrentProcess(), &createFt, &exitFt, &kernelFt, &userFt)) {
         lastProcessCpuTime = getFileTimeAsUint64(&kernelFt) + getFileTimeAsUint64(&userFt);
     }
+#else
+    long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+    numProcessors = (nprocs > 0) ? static_cast<int>(nprocs) : 1;
+
+    struct tms timeSample;
+    clock_t nowTicks = times(&timeSample);
+    lastCpuCheckTime = static_cast<uint64_t>(nowTicks);
+    lastProcessCpuTime = static_cast<uint64_t>(timeSample.tms_utime + timeSample.tms_stime);
 #endif
 }
 
@@ -84,6 +93,36 @@ SystemMetrics TelemetryMonitor::updateMetrics() {
         lastCpuCheckTime = currentSystemTime;
         lastProcessCpuTime = currentProcessTime;
     }
+#else
+    // 1. RAM Usage (POSIX)
+    struct rusage usage;
+    if (getrusage(RUSAGE_SELF, &usage) == 0) {
+#if defined(__APPLE__)
+        metrics.ramUsageKb = static_cast<float>(usage.ru_maxrss) / 1024.0f;
+#else
+        metrics.ramUsageKb = static_cast<float>(usage.ru_maxrss);
+#endif
+    }
+
+    // 2. CPU Usage (POSIX)
+    struct tms timeSample;
+    clock_t nowTicks = times(&timeSample);
+    uint64_t currentSystemTime = static_cast<uint64_t>(nowTicks);
+    uint64_t currentProcessTime = static_cast<uint64_t>(timeSample.tms_utime + timeSample.tms_stime);
+
+    if (lastCpuCheckTime > 0) {
+        uint64_t timeDelta = currentSystemTime - lastCpuCheckTime;
+        uint64_t processDelta = currentProcessTime - lastProcessCpuTime;
+
+        if (timeDelta > 0) {
+            metrics.cpuPercent = (static_cast<float>(processDelta) / static_cast<float>(timeDelta)) * 100.0f / static_cast<float>(numProcessors);
+            if (metrics.cpuPercent < 0.0f) metrics.cpuPercent = 0.0f;
+            if (metrics.cpuPercent > 100.0f) metrics.cpuPercent = 100.0f;
+        }
+    }
+
+    lastCpuCheckTime = currentSystemTime;
+    lastProcessCpuTime = currentProcessTime;
 #endif
 
     return metrics;

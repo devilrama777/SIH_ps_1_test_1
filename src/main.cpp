@@ -12,17 +12,80 @@
 
 #include <iostream>
 #include <vector>
-#include <mutex>
-#include <thread>
 #include <chrono>
 #include <iomanip>
 #include <atomic>
 #include <cmath>
+#include <csignal>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <conio.h>
+
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
+class Mutex {
+public:
+    Mutex() { InitializeCriticalSection(&cs); }
+    ~Mutex() { DeleteCriticalSection(&cs); }
+    void lock() { EnterCriticalSection(&cs); }
+    void unlock() { LeaveCriticalSection(&cs); }
+private:
+    CRITICAL_SECTION cs;
+};
+
+class LockGuard {
+public:
+    explicit LockGuard(Mutex& m) : mtx(m) { mtx.lock(); }
+    ~LockGuard() { mtx.unlock(); }
+private:
+    Mutex& mtx;
+};
+
+inline void sleepMs(int ms) {
+    Sleep(ms);
+}
+
+static bool checkKeyQuit() {
+    if (_kbhit()) {
+        char ch = _getch();
+        return (ch == 'q' || ch == 'Q' || ch == 27);
+    }
+    return false;
+}
+#else
+#include <mutex>
+#include <thread>
+#include <unistd.h>
+#include <termios.h>
+#include <sys/ioctl.h>
+using Mutex = std::mutex;
+using LockGuard = std::lock_guard<std::mutex>;
+inline void sleepMs(int ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+}
+
+static bool checkKeyQuit() {
+    int bytesWaiting = 0;
+    ioctl(STDIN_FILENO, FIONREAD, &bytesWaiting);
+    if (bytesWaiting > 0) {
+        char ch = 0;
+        struct termios oldt, newt;
+        tcgetattr(STDIN_FILENO, &oldt);
+        newt = oldt;
+        newt.c_lflag &= ~(ICANON | ECHO);
+        tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+        if (read(STDIN_FILENO, &ch, 1) > 0) {
+            tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+            return (ch == 'q' || ch == 'Q' || ch == 27);
+        }
+        tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    }
+    return false;
+}
 #endif
 
 // ANSI Colors
@@ -56,7 +119,7 @@ public:
     }
 
     void write(const float* data, size_t count) {
-        std::lock_guard<std::mutex> lock(mtx);
+        LockGuard lock(mtx);
         for (size_t i = 0; i < count; ++i) {
             buf[head] = data[i];
             head = (head + 1) % cap;
@@ -65,7 +128,7 @@ public:
     }
 
     void getLatest(std::vector<float>& out) {
-        std::lock_guard<std::mutex> lock(mtx);
+        LockGuard lock(mtx);
         out.resize(cap);
         if (!isFull) {
             for (size_t i = 0; i < cap; ++i) {
@@ -85,7 +148,7 @@ private:
     size_t cap;
     size_t head;
     bool isFull;
-    std::mutex mtx;
+    Mutex mtx;
 };
 
 static AudioRingBuffer g_ringBuffer(BUFFER_SAMPLES);
@@ -192,7 +255,17 @@ void printDashboard(AgentState state, const SystemMetrics& metrics, const TinyKW
     std::cout << std::flush;
 }
 
+static void signalHandler(int signum) {
+    (void)signum;
+    g_running = false;
+}
+
 int main() {
+    std::signal(SIGINT, signalHandler);
+#if defined(SIGTERM)
+    std::signal(SIGTERM, signalHandler);
+#endif
+
 #if defined(_WIN32)
     HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
     DWORD dwMode = 0;
@@ -227,7 +300,7 @@ int main() {
     }
 
     std::cout << "Microphone started successfully @ 16kHz Mono.\n";
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    sleepMs(500);
 
     AgentState state = AgentState::SLEEPING;
     int stateHoldTicks = 0;
@@ -258,14 +331,9 @@ int main() {
     while (g_running) {
         auto loopStart = std::chrono::steady_clock::now();
 
-#if defined(_WIN32)
-        if (_kbhit()) {
-            char ch = _getch();
-            if (ch == 'q' || ch == 'Q' || ch == 27) {
-                break;
-            }
+        if (checkKeyQuit()) {
+            break;
         }
-#endif
 
         g_ringBuffer.getLatest(audioWindow);
         float currentRms = computeRMS(audioWindow.data(), BUFFER_SAMPLES);
@@ -394,7 +462,7 @@ int main() {
         auto loopEnd = std::chrono::steady_clock::now();
         auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(loopEnd - loopStart).count();
         if (elapsedMs < 100) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100 - elapsedMs));
+            sleepMs(static_cast<int>(100 - elapsedMs));
         }
     }
 
